@@ -1,0 +1,146 @@
+Visão Geral do Sistema                                                                                                
+  O MercadoIA é um Bot de Investimentos modular para análise e negociação de criptomoedas e ações, com arquitetura de
+  processos independentes e controle via interface gráfica. Está atualmente em operação estável com paper trading para
+  BTC, ETH e SOL.
+
+  Componentes Principais Analisados
+
+  1. memoria.md (Já revisado)
+
+  Contém a documentação persistente do projeto com:
+  - Objetivo: Sistema modular de controle e execução para análise de ativos
+  - Tecnologias: Python (subprocess, tkinter, sqlite3, requests) + SQLite para persistência
+  - Arquitetura Atual:
+    - gui.py: Processo pai (central de controle)
+    - main.py: Processo filho (execução da estratégia em console separado)
+    - data_engine.py: Motor de dados com persistência e padrão de retry
+    - strategy.py: Lógica de decisão com trailing stop dinâmico e filtros
+  - Status: Estável, em operação (paper trading ativo)
+  - Histórico Recente (até 2026-06-23):
+    - GUI com abas usando tkinter/ttk.Notebook
+    - Comunicação "Robô-Painel" via SQLite (comandos: PAUSAR, RESUMIR, VENDA_TOTAL)
+    - Execução isolada do main.py com CREATE_NEW_CONSOLE
+    - Resiliência de rede com decorator @retry_on_failure (5 tentativas)
+    - Implementação do trailing stop dinâmico para proteção automática de lucro
+
+  2. gui.py - Interface Gráfica (Processo Pai)
+
+  Função: Painel de controle central que comunica com o robô de trading via banco SQLite.
+
+  Principais Características:
+  - Interface com abas (ttk.Notebook) para CONTROL, LOGS, RELATÓRIOS, etc.
+  - Controle de processos:
+    - Botões para INICIAR/PARAR o main.py (gerencia subprocesso com CREATE_NEW_CONSOLE)
+    - Comunicação via comandos SQLite: envia PAUSAR/RESUMIR/VENDA_TOTAL para a tabela commands
+    - Função enviar_comando() que grava comandos no banco para consumo pelo main.py
+  - Integração com ferramentas auxiliares:
+    - Botão "Monitorar Logs" abre monitors_log.py
+    - Botão "Ver Relatório" abre view_report.py
+  - Design visual escuro (#1a252f) com tema 'clam' para ttk
+
+  Fluxo de Comunicação:
+  GUI → [grava comando em SQLite commands] ← main.py [lê e executa comando]
+
+  3. main.py - Motor de Trading (Processo Filho)
+
+  Função: Executa a lógica de trading em loop contínuo, rodando em console separado pelo GUI.
+
+  Principais Características:
+  - Loop principal com monitoramento contínuo da WATCHLIST (BTC, ETH, SOL conforme memoria.md)
+  - Ciclo de operação:
+    a. Verifica comandos do GUI via check_for_commands() (PAUSAR/RESUMIR/VENDA_TOTAL)
+    b. Para cada símbolo:
+        - Busca candles recentes via get_live_candles() (data_engine)
+      - Calcula indicadores: preço atual, SMA200, volume, RSI
+      - Exibe status formatado no console
+      - Toma decisão via calcular_decisao() (strategy)
+      - Executa ações: COMPRA, VENDA (com logging detalhado)
+  - Mecanismos de controle:
+    - Pausa/responsiva imediata aos comandos do GUI
+    - Venda de emergência (VENDA_TOTAL) que liquida todas as posições
+    - Log detalhado em robo_debug.log para auditoria
+  - Tratamento de exceções: captura KeyboardInterrupt para encerramento limpo
+
+  4. data_engine.py - Camada de Dados
+
+  Função: Gerencia persistência de estado, comunicação com API Binance e logs de sistema.
+
+  Principais Características:
+  - Padrão de Resiliência:
+    - Decorator @retry_on_failure(retries=5, delay=10) para chamadas de API
+    - Tenta até 5 vezes com intervalo de 10s antes de falhar
+    - Levanta exceção específica para erros de rede/API (ex: 429 Too Many Requests)
+  - Persistência SQLite:
+    - Tabela bot_state: armazena estado por símbolo ({symbol}_em_posicao, {symbol}_preco_compra)
+    - Tabela commands: fila de comandos do GUI (com auto-exclusão após leitura)
+    - Tabela trade_history: histórico completo de trades (timestamp, símbolo, tipo, preços, resultado%)
+  - Integração Binance:
+    - Função get_live_candles() com timeout de 10s e tratamento de erros HTTP
+    - Cria automática das tabelas via init_trading_tables()
+    - Log de erros do sistema em arquivo separado (via log_sistema_erro())
+
+  5. strategy.py - Lógica de Decisão
+
+  Função: Implementa a estratégia de trading com análise técnica e gestão de risco.
+
+  Principais Características:
+  - Indicadores Utilizados:
+    - SMA200 (Média Móvel Simples de 200 períodos)
+    - RSI (Índice de Força Relativa, calculado em detect_patterns_with_alerts)
+    - Análise de volume (comparação com média móvel de 20 períodos)
+  - Filtros de Entrada (Compra):
+    - Preço atual > SMA200
+    - Volume atual > (médium volume 20 períodos × VOL_MULTIPLIER do config)
+    - RSI < 70 (evita compra em sobrecompra)
+  - Lógica de Saída (Venda) - Trailing Stop Dinâmico:
+    - Ativa somente após 1% de lucro (variacao >= 0.01)
+    - Stop dinâmico = preco_atual × 0.995 (protege 0.5% do lucro atual)
+    - Gatilhos de venda (em ordem de prioridade):
+        i. Preço ≤ stop dinâmico E lucro > 0.5% → TRAILING_STOP
+      ii. Lucro ≥ TAKE_PROFIT_PCT → TAKE_PROFIT
+      iii. Prejuízo ≤ -STOP_LOSS_PCT → STOP_LOSS
+    - Ajuste opcional de stop em 5% de lucro (retorna "AJUSTAR_STOP")
+  - Saída da Função: Tupla (comando, parâmetro) onde:
+    - comando: "COMPRA", "VENDA" (com tipo), "MANTER", "AJUSTAR_STOP", "AGUARDAR"
+    - parâmetro: preço de entrada (para compra) ou tupla (tipo, percentual) para venda
+
+  Pontos Fortes da Arquitetura
+
+  1. Separação Clara de Responsabilidades:
+    - GUI: apenas controle e comunicação
+    - Main: loop de execução e tomada de decisão
+    - Data Engine: persistência e resiliência de rede
+    - Strategy: lógica pura de análise técnica
+  2. Resiliência e Tolerância a Falhas:
+    - Mecanismo de retry robusto para APIs externas
+    - Estado persistente permite recuperação após crash
+    - Comunicação assíncrona via banco evita acoplamento direto
+  3. Gestão de Avanço de Risco Sofisticada:
+    - Trailing stop dinâmico que protege lucros automaticamente
+    - Múltiplas condições de saída (stop fixo, take profit, trailing)
+    - Filtros de volume e RSI para reduzir falsos sinais
+  4. Modularidade e Manutenibilidade:
+    - Alterações na estratégia afetam apenas strategy.py
+    - Troca de exchange exigiria mudanças apenas em data_engine.py
+    - Interface pode ser modificada sem tocar na lógica de trading
+  5. Rastreabilidade e Debugging:
+    - Logs detalhados em robo_debug.log com timestamps
+    - Histórico completo de trades em SQLite para análise posterior
+    - Visibilidade clara do estado através do GUI e logs
+
+  Observações Finais
+
+  O sistema demonstra um nível elevado de maturidade técnica para um projeto de trading automatizado. A implementação do
+   trailing stop dinâmico é particularmente notável, pois representa uma melhoria significativa sobre estratégias de
+  stop fixo tradicional. A arquitetura de processos separados com comunicação via banco de dados proporciona tanto
+  isolamento (falha na GUI não derruba o trading) quanto flexibilidade (interface pode ser modificada
+  independentemente).
+
+  Para produção real (não paper trading), seriam necessárias adicionais:
+  - Criptografia de credenciais de API
+  - Controle de slippage e validação de ordens
+  - Sistema de alertas para falhas críticas
+  - Limites de position sizing mais sofisticados
+
+  No entanto, para o contexto atual de desenvolvimento e testes, o código está bem estruturado, documentado e pronto
+  para iterações adicionais conforme necessário.

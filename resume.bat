@@ -1,0 +1,1 @@
+cmd openclaude --resume b8fc7ccf-0d47-4cd6-84ce-ea62756f6ec2

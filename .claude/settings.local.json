@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(python:*)",
+      "Bash(pip list:*)",
+      "Bash(pip install:*)",
+      "Bash(dir:*)",
+      "Bash(git init:*)",
+      "Bash(sqlite3:*)"
+    ]
+  }
+}
