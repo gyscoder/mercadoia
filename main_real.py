@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Sistema de Trading REAL para MercadoIA MVP - Operando em REAIS (BRL)
+Sistema de Trading REAL para MercadoIA MVP - Operando em USDT
 IMPORTANTE: Este sistema opera com dinheiro real. Use com extrema cautela.
 RECOMENDADO: Começar com valores muito baixos para teste.
-CAPITAL INICIAL: 100 BRL (total da banca, não por trade)
+CAPITAL INICIAL: 100 USDT (total da banca, não por trade)
 """
 
 import time
@@ -37,6 +37,7 @@ class TradingReal:
         self.exchange = None
         self.initialized = False
         self.emergency_stop = False
+        self.symbol_override = None  # Para override via linha de comando
 
         # Configurações de risco (personalizáveis - valores em USDT)
         self.MAX_RISK_PER_TRADE = 0.02  # 2% do saldo USDT por trade
@@ -105,9 +106,9 @@ class TradingReal:
             if not self.exchange.test_connection():
                 raise ConnectionError("Falha ao conectar com a Binance API")
 
-            # Obtém saldo inicial em BRL
-            self.daily_start_balance = self.exchange.get_balance('BRL')
-            logger.info(f"Sistema inicializado. Saldo inicial BRL: {self.daily_start_balance:.2f}")
+            # Obtém saldo inicial em USDT
+            self.daily_start_balance = self.exchange.get_balance('USDT')
+            logger.info(f"Sistema inicializado. Saldo inicial USDT: {self.daily_start_balance:.2f}")
             # Inicializa tabelas de trading (mantém separação com paper trading se necessário)
             init_trading_tables()
 
@@ -124,13 +125,13 @@ class TradingReal:
             return False
 
         try:
-            current_balance = self.exchange.get_balance('BRL')
+            current_balance = self.exchange.get_balance('USDT')
             self.daily_pnl = current_balance - self.daily_start_balance
 
-            # Verifica perda diária máxima (em BRL)
-            max_daily_loss_brl = self.daily_start_balance * self.MAX_DAILY_LOSS
-            if self.daily_pnl < (-max_daily_loss_brl):
-                logger.warning(f"LIMITE DE PERDA DIÁRIA ATINGIDO: {self.daily_pnl:.2f} BRL (limite: {-max_daily_loss_brl:.2f} BRL)")
+            # Verifica perda diária máxima (em USDT)
+            max_daily_loss_usdt = self.daily_start_balance * self.MAX_DAILY_LOSS
+            if self.daily_pnl < (-max_daily_loss_usdt):
+                logger.warning(f"LIMITE DE PERDA DIÁRIA ATINGIDO: {self.daily_pnl:.2f} USDT (limite: {-max_daily_loss_usdt:.2f} USDT)")
                 return False
 
             # Verifica saldo mínimo para operar (pelo menos o valor mínimo da ordem)
@@ -314,9 +315,9 @@ class TradingReal:
             logger.error("Falha ao inicializar sistema. Abortando.")
             return
 
-        logger.info("=== INICIANDO SISTEMA DE TRADING REAL (BRL) ===")
-        logger.warning("ATENÇÃO: Este sistema está operando com DINHEIRO REAL EM REAIS!")
-        logger.info(f"Capital inicial (banca): {self.daily_start_balance:.2f} BRL")
+        logger.info("=== INICIANDO SISTEMA DE TRADING REAL (USDT) ===")
+        logger.warning("ATENÇÃO: Este sistema está operando com DINHEIRO REAL EM USDT!")
+        logger.info(f"Capital inicial (banca): {self.daily_start_balance:.2f} USDT")
         logger.info(f"Risco máximo por trade: {self.MAX_RISK_PER_TRADE*100}% da banca")
         logger.info(f"Perda diária máxima: {self.MAX_DAILY_LOSS*100}% da banca inicial")
 
@@ -336,19 +337,16 @@ class TradingReal:
                             break
 
                 if comando == "VENDA_TOTAL":
-                      logger.warning("!!! COMANDO DE VENDA TOTAL RECEBIDO !!!")
-                      # Lógica para vender todas as posições
-                      for symbol in WATCHLIST:
-                          # Para pares USDT, usamos o símbolo diretamente
-                          usdt_symbol = self._usdt_symbol(symbol)  # Garante que seja XXXUSDT
-
-                          em_posicao, _ = load_state(symbol)  # Verifica posição usando símbolo original
-                          if em_posicao:
-                              base_asset = usdt_symbol.replace('USDT', '')
-                              quantidade = self.exchange.get_balance(base_asset)
-                              if quantidade > 0:
-                                  self.execute_trade(usdt_symbol, 'SELL', quantidade)
-                      break  # Sai do loop após venda total
+                    logger.warning("!!! COMANDO DE VENDA TOTAL RECEBIDO !!!")
+                    # Lógica para vender todas as posições
+                    for symbol in WATCHLIST:
+                        em_posicao, _ = load_state(symbol)  # Verifica posição usando símbolo original
+                        if em_posicao:
+                            base_asset = symbol.replace('USDT', '')
+                            quantidade = self.exchange.get_balance(base_asset)
+                            if quantidade > 0:
+                                self.execute_trade(symbol, 'SELL', quantidade)
+                    break  # Sai do loop após venda total
 
                 # Verifica limites de risco antes de operar
                 if not self.check_risk_limits():
@@ -367,14 +365,8 @@ class TradingReal:
                         if check_for_commands() == "PAUSAR":
                             continue
 
-                        # Converte para símbolo BRL para trading
-                        brl_symbol = self._usdt_to_brl_symbol(symbol)
-                        if brl_symbol is None:
-                            logger.warning(f"Par BRL não disponível para {symbol}, pulando análise...")
-                            continue
-
-                        # Busca dados de mercado (usamos o par USDT original para análise, pois geralmente tem melhor liquidez/dados)
-                        klines = get_live_candles(symbol)  # Usa o símbolo original (USDT) para análise
+                        # Busca dados de mercado (usamos o par USDT para análise e trading)
+                        klines = get_live_candles(symbol)  # Usa o símbolo USDT para análise
                         if not klines or len(klines) < 200:  # Necessário para SMA200
                             logger.warning(f"Dados insuficientes para {symbol} (análise em {symbol})")
                             continue
@@ -408,15 +400,6 @@ class TradingReal:
                             f"Vol: {int(volume_atual)} | Status: {status_pos}"
                         )
 
-                        # Converte preço para BRL usando taxa atual
-                        try:
-                            brl_usdt_rate = self._get_brl_usdt_rate()
-                            preco_atual_brl = preco_atual_usdt * brl_usdt_rate
-                            sma200_brl = sma200 * brl_usdt_rate if sma200 else None
-                        except Exception as e:
-                            logger.error(f"Falha ao obter taxa de conversão BRL/USDT: {e}")
-                            continue  # Pula este ciclo se não puder converter
-
                         # Calcula decisão baseada na análise (os indicadores são proporcionais, então podemos usar os valores USDT diretamente)
                         # RSI e comparações de preço são independentes da moeda de cotação
                         comando_trade, resultado = calcular_decisao(
@@ -424,23 +407,23 @@ class TradingReal:
                             em_posicao, preco_compra, rsi, TAKE_PROFIT_PCT, STOP_LOSS_PCT
                         )
 
-                        # Executa ações baseado na decisão (usando o par BRL para trading)
+                        # Executa ações baseado na decisão (usando o par USDT para trading)
                         if comando_trade == "COMPRA" and not em_posicao:
                             # Verifica se já temos posição (dupla verificação)
                             em_posicao_check, _ = load_state(symbol)
                             if not em_posicao_check:
-                                # Calcula tamanho da posição em BRL
-                                quantidade = self.calculate_position_size(brl_symbol, preco_atual_brl)
+                                # Calcula tamanho da posição (quantidade do ativo base)
+                                quantidade = self.calculate_position_size(symbol, preco_atual_usdt)
                                 if quantidade > 0:
-                                    success, _ = self.execute_trade(brl_symbol, 'BUY', quantidade)
+                                    success, _ = self.execute_trade(symbol, 'BUY', quantidade)
                                     if success:
-                                        logger.info(f"COMPRA EXECUTADA para {symbol} (via {brl_symbol})")
+                                        logger.info(f"COMPRA EXECUTADA para {symbol}")
                                     else:
-                                        logger.error(f"FALHA NA COMPRA para {symbol} (via {brl_symbol})")
+                                        logger.error(f"FALHA NA COMPRA para {symbol}")
 
                         elif comando_trade == "VENDA" and em_posicao:
                             # Gestão de posição (stop loss, take profit)
-                            self.manage_position(brl_symbol)
+                            self.manage_position(symbol)
 
                         # Pequena pausa entre símbolos para não sobrecarregar API
                         time.sleep(0.5)
